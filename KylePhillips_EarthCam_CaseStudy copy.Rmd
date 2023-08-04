@@ -1,0 +1,295 @@
+# Libraries
+```{r}
+library(dplyr)
+library(janitor)
+library(lubridate)
+library(skimr)
+library(readr)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+library(imputeTS)
+library(forecast)
+library(zoo)
+library(urca)
+library(pracma)
+library(tidyverse)
+library(tidytuesdayR)
+library(imputeTS)
+```
+
+# Load Data
+```{r}
+# Read data in and clean names:
+data <- read.csv("/Users/kephi/Desktop/Earthcam/EarthCam_DataScience_Data.csv") %>% clean_names()
+
+head(data)
+
+
+```
+
+# Basic Data Analysis
+```{r}
+# Numer rows:
+nrow(data)
+
+# Number columns:
+ncol(data)
+
+# Analyze each variable by missing values and number of uniques for each:
+skim(data)
+
+# Cloud and conditions analysis:
+table(data$current_conditions)
+table(data$condition_type)
+table(data$cloud_condition)
+table(data$cloud_report)
+table(data$clouds)
+```
+
+# Data Transformations - Column Separation
+```{r}
+# Separate observed date and times:
+data[c('d', 'time')] <- str_split_fixed(data$observed_at_date_time, ' ', 2)
+
+data$date <- as.Date(data$d, format = "%m/%d/%Y")
+
+
+# Temperature column:
+data <- separate(data, temperature, into = c("temp_f", "temp_c"), sep = ",")
+
+data$temp_fah <- parse_number(data$temp_f)
+data$temp_cel <- parse_number(data$temp_c)
+
+# Dewpoint:
+data <- separate(data, dewpoint, into = c("dew_f", "dew_c"), sep = ",")
+
+data$dew_fah <- parse_number(data$dew_f)
+data$dew_cel <- parse_number(data$dew_c)
+
+# Feels like:
+data[c('type_fl', 'fl_fah', 'fl_cel')] <- str_split_fixed(data$feels_like, ',', 3)
+
+data[c('type_del', 'type_feel_like')] <- str_split_fixed(data$type_fl, ' ', 2)
+data$feel_fah <- parse_number(data$fl_fah)
+data$feel_cel <- parse_number(data$fl_cel)
+
+data$type_feel_like <- gsub("'", "", data$type_feel_like)
+
+# Pressure: # 15 missing values
+data <- separate(data, pressure, into = c("mill", "merc"), sep = ",")
+
+data$press_mill <- parse_number(data$mill)
+data$press_merc <- parse_number(data$merc)
+
+# Visibility: 
+table(data$visibility) #  Can delete Direction and DirectionShort because no unique values
+
+data[c('vis_m', 'vis_k', 'direc')] <- str_split_fixed(data$visibility, ',', 3)
+data$vis_miles <- parse_number(data$vis_m)
+data$vis_kilo <- parse_number(data$vis_k)
+
+# Precipitation: 
+
+# Wind # 41 missing degrees
+data[c('deg', 'w_dir', 'wind_filler')] <- str_split_fixed(data$wind, ',', 3)
+
+data[c('wind_delete', 'wind_direc')] <- str_split_fixed(data$w_dir, ': ', 2)
+data$wind_degree <- parse_number(data$deg)
+
+data$wind_direc <- gsub("'", "", data$wind_direc)
+
+# Moon:
+data[c('pha', 'pha_name', 'illum', 'age', "filler_moon")] <- str_split_fixed(data$moon_info, ',', 5)
+
+data[c('del_moon', 'phase_name')] <- str_split_fixed(data$pha_name, ': ', 2)
+data$moon_phase <- parse_number(data$pha)
+data$moon_age <- parse_number(data$age)
+
+data$phase_name <- gsub("'", "", data$phase_name)
+
+
+
+```
+
+# Data Transformations - Column Deletion and Simplified Dataset
+```{r}
+# Original columns to delete that aren't useful:
+new <- subset(data, select = -c(observed_at, station, record, datetime, current_conditions_abbreviation, 	
+lightning, raw, daily_total_precipitation))
+
+
+# Columns to delete that were used in previous step of separation:
+new <- subset(new, select = -c(observed_at_date_time, feels_like, wind, visibility, heat_index, windchill, moon_info, temp_f, temp_c, dew_f, dew_c, type_fl, fl_fah, fl_cel, type_del, mill, merc, deg, w_dir, wind_filler, wind_delete, pha, age, illum, filler_moon, del_moon, d, vis_m, vis_k, direc, pha_name))
+
+```
+
+# Handle Missing Values
+```{r}
+# Check again for missing values:
+skim(new)
+
+# Impute for missing values in columns that require it:
+new$press_mill <- na.aggregate(new$press_mill, FUN = median, na.rm = TRUE)
+new$press_merc <- na.aggregate(new$press_merc, FUN = median, na.rm = TRUE)
+new$wind_degree <- na.aggregate(new$wind_degree, FUN = median, na.rm = TRUE)
+
+```
+
+
+# Simple Data Visualizations
+```{r}
+# Create a year, day, and month column to assist in visulizations and forecasting down the line:
+new <- new %>%
+  mutate(day = day(date)) %>%
+  mutate(mon = month(date)) %>%
+  mutate(yr = year(date))
+
+# Now that data is clean and organized, some visualizations can be created to get an understanding of the data and identify trends and or meaningful insights
+
+# Temperature in Fahrenheit over the 5 year period by each record:
+temp_5year <- new %>% 
+  ggplot(aes(x = date, y = temp_fah)) + geom_line() + labs(title = "Temperature in Fahrenheit Over 5 Year Period", x = "Date", y = "Temperature in Fahrenheit")
+
+temp_5year
+
+# Dewpoint in Fahrenheit over the 5 year period:
+dew_5year <- new %>% 
+  ggplot(aes(x = date, y = dew_fah)) + geom_line() + labs(title = "Dewpoint in Fahrenheit Over 5 Year Period", x = "Date", y = "Dewpoint in Fahrenheit")
+
+dew_5year 
+
+# Feels like temperature in Fahreinheit over the 5 year period:
+feel_5year <- new %>% 
+  ggplot(aes(x = date, y = feel_fah)) + geom_line() + labs(title = "Feels Like Temperature in Fahrenheit Over 5 Year Period", x = "Date", y = "Feels Like in Fahrenheit")
+
+feel_5year
+
+# Instances of recorded windchill and or heat index by individual year:
+chill <- new %>% 
+  group_by(yr) %>%
+  filter(type_feel_like == "Windchill") %>%
+  summarize(count_windchill = n())
+
+index <- new %>% 
+  group_by(yr) %>%
+  filter(type_feel_like == "HeatIndex") %>%
+  summarize(count_index = n())
+
+chill_index <- chill %>%
+  full_join(index, by ='yr')
+
+chill_index <- replace(chill_index, is.na(chill_index), 0)
+
+chill_index_graph <- chill_index %>%
+  pivot_longer(count_windchill:count_index, names_to = "Type", values_to = "value") %>%
+  ggplot(aes(yr, value, fill = Type)) +
+  geom_col(position = "dodge") + labs(title = "Instances in Windchill and Heat Index Cver 5 Year Period", x = "Year", y = "Number of Instances") + theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1))
+
+chill_index_graph
+
+# Air pressure recorded in milibars over the 5 year period:
+press_5_year <- new %>% 
+  ggplot(aes(x = date, y = press_mill)) + geom_line() + labs(title = "Pressure in Millibars Over 5 Year Period", x = "Date", y = "Pressure in Millibars")
+
+press_5_year
+
+# Graph to show relative humidity correlated to other things:
+hum_5_year <- new %>% 
+  ggplot(aes(x = date, y = relative_humidity)) + geom_line() + labs(title = "Humidity Reading Over 5 Year Period", x = "Date", y = "Humidity Expressed as Decimal")
+
+hum_5_year
+
+# Graph to show the wind patterns and most frequent directions:
+tot_wind_direc <- new %>%
+  group_by(wind_direc) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+tot_wind_direc <- tot_wind_direc %>% 
+  ggplot(aes(x = reorder(wind_direc, count), y = count)) + geom_bar(fill = "red", stat = 'identity') + labs(title = "Instances of Wind Direction Over 5 Year Period", x = "Recorded Direction", y = "Number of Instances") + theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1)) + coord_flip()
+
+tot_wind_direc
+
+# Wind degree:
+wind_degree_5_year <- new %>%
+  ggplot(aes(x = date, y = wind_degree)) + geom_line() + labs(title = "Wind Degree Changes Over 5 Year Period", x = "Date", y = "Recorded Wind Degree")
+
+wind_degree_5_year # Rendered not very useful
+
+# Graph to show visibility:
+vis_5_year <- new %>% 
+  ggplot(aes(x = date, y = vis_miles)) + geom_line() + labs(title = "Visibility in Miles Over 5 Year Period", x = "Date", y = "Visibility in Miles")
+
+vis_5_year # Rendered not very useful
+
+# Cloud report:
+
+cloud_rep_5_year <- new %>%
+  group_by(cloud_report) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+cloud_rep_5_year <- cloud_rep_5_year %>% 
+  ggplot(aes(x = reorder(cloud_report, count), y = count)) + geom_bar(fill = "red", stat = 'identity') + labs(title = "Cloud Report Instances Over 5 Year Period", x = "Cloud Report Type", y = "Number of Instances") + theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1)) + coord_flip()
+
+cloud_rep_5_year
+
+# Current conditions:
+
+conditions_5_year <- new %>%
+  group_by(current_conditions) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+conditions_5_year <- conditions_5_year %>% 
+  ggplot(aes(x = reorder(current_conditions, count), y = count)) + geom_bar(fill = "red", stat = 'identity') + labs(title = "Current Conditions Instances Over 5 Year Period", x = "Current Condition Type", y = "Number of Instances") + theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1)) + coord_flip()
+
+conditions_5_year
+
+
+
+```
+# Time Series Forecasting for 2024
+```{r}
+# Create a time series forecasting model to visualize the weather in temperature Fahrenheit:
+head(new)
+
+grouped <- new %>%
+  group_by(yr, mon, day) %>%
+  summarize(temp_total = mean(temp_fah))
+head(grouped)
+
+temp_day <- subset(grouped, select=c(temp_total))
+head(temp_day)
+
+
+temp_ts <- ts(temp_day, start=c(2018,5,1), frequency = 365)
+plot(temp_ts)
+
+# Check for white noise:
+Box.test(temp_ts, lag=8, fitdf=0, type="Lj")
+
+# Acf:
+ggAcf(temp_ts, lag.max=200)
+
+# Pacf:
+ggPacf(temp_ts, lag.max=200)
+
+# Check for stationarity:
+temp_df <- ur.df(temp_ts, type = "drift")
+summary(temp_df)
+
+
+# Construct a model or multiple to predict temperatures:
+fit_auto <- auto.arima(temp_ts)
+summary(fit_auto)
+checkresiduals(fit_auto)
+accuracy(fit_auto)
+
+forecast(fit_auto, h=365)
+
+# Visualize the forecasted weather in degrees Fahrenheit for 2024:
+fit_auto %>% forecast() %>% autoplot()
+```
+
